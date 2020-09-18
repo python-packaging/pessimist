@@ -14,22 +14,27 @@ from packaging.requirements import Requirement
 
 LOG = logging.getLogger(__name__)
 
+
 @click.command()
-@click.option("--extend", is_flag=True, help="Ignore all bounds")
+@click.option(
+    "--extend", default="", help="Ignore all bounds on these comma-separated packages"
+)
 @click.option("--fast", is_flag=True, help="Only check extremes")
 @click.option(
     "--command", "-c", default="make test", help="Command to run with PATH from venv"
 )
 @click.option("--verbose", is_flag=True, help="Show more logging")
 @click.argument("target_dir")
-def main(target_dir: str, extend: bool, fast: bool, command: str, verbose: bool):
+def main(target_dir: str, extend: str, fast: bool, command: str, verbose: bool):
     logging.basicConfig(level=logging.DEBUG if verbose else logging.WARNING)
 
-    Manager(Path(target_dir).resolve(), command=command, extend=extend, fast=fast).solve()
+    Manager(
+        Path(target_dir).resolve(), command=command, extend=extend.split(","), fast=fast
+    ).solve()
 
 
 class Manager:
-    def __init__(self, path: Path, command: str, extend: bool, fast: bool) -> None:
+    def __init__(self, path: Path, command: str, extend: List[str], fast: bool) -> None:
         self.path = path
         self.command = command
         self.extend = extend
@@ -51,10 +56,10 @@ class Manager:
                     # TODO this doesn't handle only-pre versions well
                     # TODO some of these don't matter for 'make test', like
                     # mypy, and we'll waste a bunch of time trying versions.
-                    if not self.extend:
-                        versions = list(req.specifier.filter(pkg.releases.keys()))
-                    else:
+                    if req.name in self.extend or self.extend == "*":
                         versions = list(pkg.releases.keys())
+                    else:
+                        versions = list(req.specifier.filter(pkg.releases.keys()))
                     self.req_versions[req.name] = versions
 
                     LOG.info(
@@ -155,6 +160,9 @@ class Manager:
         # print(proc.stdout)
         # print(proc.stderr)
         LOG.debug("  Running test: %s", proc.returncode)
+        if proc.returncode != 0:
+            LOG.debug(proc.stdout)
+            LOG.debug(proc.stderr)
         return proc.returncode == 0
 
 
