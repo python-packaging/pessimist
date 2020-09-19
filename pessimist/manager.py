@@ -54,7 +54,7 @@ class Manager:
                     req = Requirement(line)
                     self.reqs.append(req)
 
-                    pkg = parse_index(req.name, cache)
+                    pkg = parse_index(req.name, cache, use_json=True)
                     self.req_package[req.name] = pkg
 
                     # TODO this doesn't handle only-pre versions well
