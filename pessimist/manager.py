@@ -6,7 +6,6 @@ from pathlib import Path
 from subprocess import PIPE, CalledProcessError, check_call, check_output, run
 from typing import Dict, List
 
-import blessings
 import click
 from honesty.cache import Cache
 from honesty.releases import Package, parse_index
