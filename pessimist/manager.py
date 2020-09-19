@@ -27,9 +27,11 @@ LOG = logging.getLogger(__name__)
 def main(target_dir: str, extend: str, fast: bool, command: str, verbose: bool):
     logging.basicConfig(level=logging.DEBUG if verbose else logging.WARNING)
 
-    Manager(
+    mgr = Manager(
         Path(target_dir).resolve(), command=command, extend=extend.split(","), fast=fast
-    ).solve()
+    )
+    if not mgr.solve():
+        sys.exit(1)
 
 
 class Manager:
@@ -68,9 +70,12 @@ class Manager:
                         f"  fetched {req.name}: {len(versions)}/{len(pkg.releases)} allowed"
                     )
 
-    def solve(self):
+    def solve(self) -> bool:
         # Make temporary venv
         with tempfile.TemporaryDirectory() as d:
+            sys.stdout.write("set up venv... ")
+            sys.stdout.flush()
+
             check_call([sys.executable, "-m", "venv", d])
 
             # If there are no matching versions, either it's all-pre or honesty
@@ -88,17 +93,36 @@ class Manager:
                 v = versions[i]
                 return name if v == -1 else f"{name}=={self.req_versions[name][v]}"
 
+            print("ok")
+
             LOG.info("Check newest")
+            sys.stdout.write("check newest... ")
+            sys.stdout.flush()
             result = self.scenario(d, tolines())
             if not result:
                 LOG.error("Newest check failed, aborting")
-                return
+                return False
+            print("ok")
+
+            total = 1
+            for v in self.req_versions.values():
+                total += len(v) - 1
 
             if not self.fast:
                 for i, name in enumerate(names):
                     # try progressively older until we get a failure; skip this for
                     # --fast mode and just try oldest
+                    remaining = 1  # "all min" verify
+                    for k in range(i, len(names)):
+                        remaining += len(self.req_versions[names[k]]) - 1
+
                     for j in range(len(self.req_versions[name]) - 2, -1, -1):
+                        sys.stdout.write(
+                            f"check {total-remaining}/{total}...  {name}=={self.req_versions[name][j]} "
+                        )
+                        sys.stdout.flush()
+                        remaining -= 1
+
                         versions[i] = j
                         LOG.info(f"Check {name}=={self.req_versions[name][j]}")
                         try:
@@ -110,6 +134,8 @@ class Manager:
                             # failures, but this might need to be
                             # flag-controlled?
                             result = False
+                        print("ok" if result else "fail")
+
                         if not result:
                             if j == len(self.req_versions[name]) - 1:
                                 LOG.error("Newest version failed, shouldn't happen")
@@ -130,7 +156,7 @@ class Manager:
             result = self.scenario(d, tolines())
             if not result:
                 LOG.error("Min check failed, aborting")
-                return
+                return False
 
             print("Passing with min:")
             print()
@@ -142,6 +168,8 @@ class Manager:
                     print(f"{old_req} -> {new_req}")
                 else:
                     print(f"{old_req}")
+
+            return True
 
     def install(self, venv_dir, line):
         LOG.debug("Install %s", line)
