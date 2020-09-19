@@ -3,7 +3,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from subprocess import PIPE, check_call, check_output, run
+from subprocess import PIPE, CalledProcessError, check_call, check_output, run
 from typing import Dict, List
 
 import blessings
@@ -23,7 +23,7 @@ LOG = logging.getLogger(__name__)
 @click.option(
     "--command", "-c", default="make test", help="Command to run with PATH from venv"
 )
-@click.option("--verbose", is_flag=True, help="Show more logging")
+@click.option("--verbose", "-v", is_flag=True, help="Show more logging")
 @click.argument("target_dir")
 def main(target_dir: str, extend: str, fast: bool, command: str, verbose: bool):
     logging.basicConfig(level=logging.DEBUG if verbose else logging.WARNING)
@@ -47,6 +47,9 @@ class Manager:
             for filename in path.glob("requirements*.txt"):
                 LOG.info("Reading reqs from %s", filename)
                 for line in filename.read_text().splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
                     req = Requirement(line)
                     self.reqs.append(req)
 
@@ -99,7 +102,15 @@ class Manager:
                     for j in range(len(self.req_versions[name]) - 2, -1, -1):
                         versions[i] = j
                         LOG.info(f"Check {name}=={self.req_versions[name][j]}")
-                        result = self.scenario(d, [toline(i)])
+                        try:
+                            result = self.scenario(d, [toline(i)])
+                        except CalledProcessError:
+                            # TODO some versions can't be installed because
+                            # they're wheel-only and don't have a version built
+                            # that we're testing on; this considers those to be
+                            # failures, but this might need to be
+                            # flag-controlled?
+                            result = False
                         if not result:
                             if j == len(self.req_versions[name]) - 1:
                                 LOG.error("Newest version failed, shouldn't happen")
