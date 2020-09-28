@@ -284,21 +284,29 @@ class Manager:
                     else:
                         min_versions[result.item.name] = result.item.version
 
-        if not self.fast:
+        if not self.fast and min_versions:
             print("Final test")
             print("==========")
             print(min_versions)
 
-            queue.put(Plan(title="min", versions=min_versions, fatal=True))
+            tmp = self.get_max_plan().versions.copy()
+            tmp.update(min_versions)
+
+            queue.put(Plan(title="min", versions=tmp, fatal=True))
             result = results.get(block=True)
             if result.exception:
                 print(f"FAIL {result.item.title}: {result.exception}")
+                print(result.output)
                 rv = 2
             else:
                 print(f"OK   {result.item.title}")
+                suggested = False
                 for k, v in min_versions.items():
                     if self.versions[k][0] != v:
                         print(f"Suggest narrowing: {k}>={v}")
+                        suggested = True
+                if not suggested:
+                    print("Everything is fine.")
 
         for i in range(parallelism):
             queue.put(None)
