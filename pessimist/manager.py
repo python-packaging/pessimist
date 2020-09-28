@@ -182,7 +182,12 @@ class Manager:
                 check_call([sys.executable, "-m", "venv", d])
 
                 env = os.environ.copy()
-                env["PATH"] = f"{d}/bin:{env['PATH']}"
+                if os.sep != "/":
+                    env["PATH"] = f"{d}\\scripts;{env['PATH']}"
+                    env["PYTHON"] = f"{d}\\scripts\\python.exe"
+                else:
+                    env["PATH"] = f"{d}/bin:{env['PATH']}"
+                    env["PYTHON"] = f"{d}/bin/python"
                 env["COVERAGE_FILE"] = f"{d}/.coverage"
 
                 while True:
@@ -198,7 +203,7 @@ class Manager:
                     # version was installed (e.g. from a dep constraint).
                     output: str = ""
                     try:
-                        buf = ["python", "-m", "pip", "install"]
+                        buf = [env["PYTHON"], "-m", "pip", "install"]
                         for k, v in item.versions.items():
                             buf.append(f"{k}=={v}")
 
@@ -265,8 +270,8 @@ class Manager:
             outstanding -= 1
             if result.exception:
                 print(f"FAIL {result.item.title}: {result.exception}")
-                # for line in result.output.splitlines():
-                #     print(f"  {line}")
+                for line in result.output.splitlines():
+                    print(f"  {line}")
 
                 if (
                     result.item.name is not None
