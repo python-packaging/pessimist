@@ -6,7 +6,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Queue
-from subprocess import PIPE, STDOUT, CalledProcessError, check_call, run
+from subprocess import PIPE, STDOUT, check_call, run
 from typing import Dict, List, Optional, Set
 
 from highlighter import EnvironmentMarkers
@@ -84,7 +84,9 @@ class Manager:
                 pkg = parse_index(name, cache, use_json=True)
                 self.packages[name] = pkg
 
-                versions = list(req.specifier.filter(pkg.releases.keys()))
+                versions: List[Version] = list(
+                    req.specifier.filter(pkg.releases.keys())  # type: ignore
+                )
                 if len(versions) == 0:
                     raise DepError("No versions match {req_str!r}; maybe pre-only?")
                 if len(versions) > 1:
@@ -107,7 +109,9 @@ class Manager:
                 pkg = parse_index(name, cache, use_json=True)
                 self.packages[name] = pkg
 
-                versions = list(req.specifier.filter(pkg.releases.keys()))
+                versions = list(
+                    req.specifier.filter(pkg.releases.keys())  # type: ignore
+                )
                 LOG.info(
                     f"  [variable] fetched {name}: {len(versions)}/{len(pkg.releases)} allowed"
                 )
@@ -143,7 +147,7 @@ class Manager:
             fatal=True,
         )
 
-    def get_min_plan(self) -> Dict[str, str]:
+    def get_min_plan(self) -> Plan:
         return Plan(
             title="min",
             versions={k: v[0] for k, v in self.versions.items()},
@@ -173,7 +177,7 @@ class Manager:
         results: Queue[Result] = Queue()
         should_cancel: bool = False
 
-        def runner():
+        def runner() -> None:
             with tempfile.TemporaryDirectory() as d:
                 check_call([sys.executable, "-m", "venv", d])
 
@@ -233,11 +237,12 @@ class Manager:
                         results.put(Result(item, None, output))
                     queue.task_done()
 
-        threads = []
+        threads: List[threading.Thread] = []
         for i in range(parallelism):
             t = threading.Thread(target=runner)
             # t.setDaemon(True)
             t.start()
+            threads.append(t)
 
         # TODO consider these phases?
         outstanding = 0
@@ -252,7 +257,7 @@ class Manager:
                 queue.put(plan)
                 outstanding += 1
 
-        min_versions = {}
+        min_versions: Dict[str, Version] = {}
         rv = 0
 
         while outstanding and not should_cancel:
@@ -264,7 +269,9 @@ class Manager:
                 #     print(f"  {line}")
 
                 if (
-                    result.item.name in min_versions
+                    result.item.name is not None
+                    and result.item.version is not None
+                    and result.item.name in min_versions
                     and min_versions[result.item.name] < result.item.version
                 ):
                     LOG.warning("  Inconsistent result")

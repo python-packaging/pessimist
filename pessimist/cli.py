@@ -1,6 +1,7 @@
 import logging
 import sys
 from pathlib import Path
+from typing import List
 
 import click
 
@@ -28,10 +29,10 @@ def main(
     command: str,
     parallelism: int,
     verbose: bool,
-):
+) -> None:
     logging.basicConfig(level=logging.DEBUG if verbose else logging.WARNING)
 
-    variable = get_metadata(target_dir).get_all("Requires-Dist", ())
+    variable: List[str] = get_metadata(Path(target_dir)).get_all("Requires-Dist", [])
     fixed = get_requirements(Path(target_dir))
 
     print("Summary")
