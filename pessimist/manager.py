@@ -9,10 +9,13 @@ from queue import Queue
 from subprocess import PIPE, STDOUT, CalledProcessError, check_call, run
 from typing import Dict, List, Optional, Set
 
+from highlighter import EnvironmentMarkers
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+
 from honesty.cache import Cache
 from honesty.releases import Package, parse_index
 from honesty.version import Version
-from packaging.requirements import Requirement
 
 LOG = logging.getLogger(__name__)
 
@@ -55,10 +58,15 @@ class Manager:
         self.names: Set[str] = set()
         self.packages: Dict[str, Package] = {}
         self.versions: Dict[str, List[Version]] = {}
+        env = EnvironmentMarkers.for_python(
+            ".".join(map(str, sys.version_info[:3])), sys.platform
+        )
 
         for req_str in [*fixed, *variable]:
             req = Requirement(req_str)
-            self.names.add(req.name)
+            if req.marker and not env.match(req.marker):
+                continue
+            self.names.add(canonicalize_name(req.name))
 
         with Cache(fresh_index=True) as cache:
             # First fetch "fixed" and see how many match:
@@ -68,9 +76,13 @@ class Manager:
 
             for req_str in fixed:
                 req = Requirement(req_str)
+                if req.marker and not env.match(req.marker):
+                    continue
 
-                pkg = parse_index(req.name, cache, use_json=True)
-                self.packages[req.name] = pkg
+                name = canonicalize_name(req.name)
+
+                pkg = parse_index(name, cache, use_json=True)
+                self.packages[name] = pkg
 
                 versions = list(req.specifier.filter(pkg.releases.keys()))
                 if len(versions) == 0:
@@ -80,31 +92,35 @@ class Manager:
                         f"More than one version matched {req_str!r}; picking one arbitrarily."
                     )
 
-                self.versions[req.name] = [versions[-1]]
+                self.versions[name] = [versions[-1]]
                 LOG.info(
                     f"  [fixed] fetched {req.name}: {len(versions)}/{len(pkg.releases)} allowed; keeping {versions[-1]!r}"
                 )
 
             for req_str in variable:
                 req = Requirement(req_str)
+                if req.marker and not env.match(req.marker):
+                    continue
 
-                pkg = parse_index(req.name, cache, use_json=True)
-                self.packages[req.name] = pkg
+                name = canonicalize_name(req.name)
+
+                pkg = parse_index(name, cache, use_json=True)
+                self.packages[name] = pkg
 
                 versions = list(req.specifier.filter(pkg.releases.keys()))
                 LOG.info(
-                    f"  [variable] fetched {req.name}: {len(versions)}/{len(pkg.releases)} allowed"
+                    f"  [variable] fetched {name}: {len(versions)}/{len(pkg.releases)} allowed"
                 )
 
                 if len(versions) == 0:
                     raise DepError("No versions match {req_str!r}; maybe pre-only?")
 
-                if req.name in versions:
+                if name in versions:
                     # Presumably this came from being in 'fixed' too; not being
                     # in 'variable' twice.  If so it will only have one version.
-                    if self.versions[req.name][0] not in versions:
+                    if self.versions[name][0] not in versions:
                         LOG.warning(
-                            f"  [variable] fixed version {self.versions[req.name][0]!r} not in {versions!r} for {req_str!r}"
+                            f"  [variable] fixed version {self.versions[name][0]!r} not in {versions!r} for {req_str!r}"
                         )
 
                     LOG.info(
@@ -113,12 +129,12 @@ class Manager:
 
                 if fast:
                     if len(versions) == 1:
-                        self.versions[req.name] = [versions[0]]
+                        self.versions[name] = [versions[0]]
                     else:
                         # zero-length already raised DepError
-                        self.versions[req.name] = [versions[0], versions[-1]]
+                        self.versions[name] = [versions[0], versions[-1]]
                 else:
-                    self.versions[req.name] = versions
+                    self.versions[name] = versions
 
     def get_max_plan(self) -> Plan:
         return Plan(
