@@ -1,5 +1,7 @@
 import logging
 import os.path
+import subprocess
+import sys
 from email.message import Message
 from email.parser import Parser
 from pathlib import Path
@@ -48,6 +50,11 @@ def get_metadata(path: Path) -> Message:
             build_backend=build_sys["build-backend"],
             backend_path=build_sys.get("backend-path"),
         )
+
+        if build_sys.get("requires"):
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install"] + build_sys["requires"]
+            )
 
         dist_info = hooks.prepare_metadata_for_build_wheel(d)
         metadata_path = Path(d, dist_info, "METADATA")
