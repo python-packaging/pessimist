@@ -67,7 +67,7 @@ def get_requirements(path: Path) -> List[str]:
     for filename in path.glob("requirements*.txt"):
         LOG.info("Reading reqs from %s", filename)
         for line in filename.read_text().splitlines():
-            line = line.strip()
+            line = line.split("#", 1)[0].strip()
             if not line:
                 continue
             req.append(line)
