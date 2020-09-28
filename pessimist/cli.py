@@ -31,7 +31,7 @@ def main(
 ):
     logging.basicConfig(level=logging.DEBUG if verbose else logging.WARNING)
 
-    variable = get_metadata(target_dir).get_all("Requires-Dist")
+    variable = get_metadata(target_dir).get_all("Requires-Dist", ())
     fixed = get_requirements(Path(target_dir))
 
     print("Summary")
