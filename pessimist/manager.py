@@ -2,207 +2,292 @@ import logging
 import os
 import sys
 import tempfile
+import threading
+from dataclasses import dataclass
 from pathlib import Path
-from subprocess import PIPE, CalledProcessError, check_call, check_output, run
-from typing import Dict, List
+from queue import Queue
+from subprocess import PIPE, STDOUT, CalledProcessError, check_call, run
+from typing import Dict, List, Optional, Set
 
-import click
 from honesty.cache import Cache
 from honesty.releases import Package, parse_index
+from honesty.version import Version
 from packaging.requirements import Requirement
 
 LOG = logging.getLogger(__name__)
 
 
-@click.command()
-@click.option(
-    "--extend", default="", help="Ignore all bounds on these comma-separated packages"
-)
-@click.option("--fast", is_flag=True, help="Only check extremes")
-@click.option(
-    "--command", "-c", default="make test", help="Command to run with PATH from venv"
-)
-@click.option("--verbose", "-v", is_flag=True, help="Show more logging")
-@click.argument("target_dir")
-def main(target_dir: str, extend: str, fast: bool, command: str, verbose: bool):
-    logging.basicConfig(level=logging.DEBUG if verbose else logging.WARNING)
+class DepError(Exception):
+    pass
 
-    mgr = Manager(
-        Path(target_dir).resolve(), command=command, extend=extend.split(","), fast=fast
-    )
-    if not mgr.solve():
-        sys.exit(1)
+
+@dataclass
+class Plan:
+    title: str
+    versions: Dict[str, Version]
+    fatal: bool
+    name: Optional[str] = None
+    version: Optional[Version] = None
+
+
+@dataclass
+class Result:
+    item: Plan
+    exception: Optional[str]
+    output: str
 
 
 class Manager:
-    def __init__(self, path: Path, command: str, extend: List[str], fast: bool) -> None:
+    def __init__(
+        self,
+        path: Path,
+        variable: List[str],
+        fixed: List[str],
+        command: str,
+        extend: List[str],
+        fast: bool,
+    ) -> None:
         self.path = path
         self.command = command
         self.extend = extend
         self.fast = fast
-        self.reqs: List[Requirement] = []
-        self.req_package: Dict[str, Package] = {}
-        self.req_versions: Dict[str, List[str]] = {}
+
+        self.names: Set[str] = set()
+        self.packages: Dict[str, Package] = {}
+        self.versions: Dict[str, List[Version]] = {}
+
+        for req_str in [*fixed, *variable]:
+            req = Requirement(req_str)
+            self.names.add(req.name)
 
         with Cache(fresh_index=True) as cache:
-            for filename in path.glob("requirements*.txt"):
-                LOG.info("Reading reqs from %s", filename)
-                for line in filename.read_text().splitlines():
-                    line = line.strip()
-                    if not line:
-                        continue
-                    req = Requirement(line)
-                    self.reqs.append(req)
+            # First fetch "fixed" and see how many match:
+            # 0: that's an error
+            # 1: great!  # >1: warning, and pick the newest (because that's what CI is likely
+            # to do; open to other ideas here though)
 
-                    pkg = parse_index(req.name, cache, use_json=True)
-                    self.req_package[req.name] = pkg
+            for req_str in fixed:
+                req = Requirement(req_str)
 
-                    # TODO this doesn't handle only-pre versions well
-                    # TODO some of these don't matter for 'make test', like
-                    # mypy, and we'll waste a bunch of time trying versions.
-                    if req.name in self.extend or self.extend == "*":
-                        versions = list(pkg.releases.keys())
-                    else:
-                        versions = list(req.specifier.filter(pkg.releases.keys()))
-                    self.req_versions[req.name] = versions
+                pkg = parse_index(req.name, cache, use_json=True)
+                self.packages[req.name] = pkg
 
-                    LOG.info(
-                        f"  fetched {req.name}: {len(versions)}/{len(pkg.releases)} allowed"
+                versions = list(req.specifier.filter(pkg.releases.keys()))
+                if len(versions) == 0:
+                    raise DepError("No versions match {req_str!r}; maybe pre-only?")
+                if len(versions) > 1:
+                    LOG.warning(
+                        f"More than one version matched {req_str!r}; picking one arbitrarily."
                     )
 
-    def solve(self) -> bool:
-        # Make temporary venv
-        with tempfile.TemporaryDirectory() as d:
-            sys.stdout.write("set up venv... ")
-            sys.stdout.flush()
+                self.versions[req.name] = [versions[-1]]
+                LOG.info(
+                    f"  [fixed] fetched {req.name}: {len(versions)}/{len(pkg.releases)} allowed; keeping {versions[-1]!r}"
+                )
 
-            check_call([sys.executable, "-m", "venv", d])
+            for req_str in variable:
+                req = Requirement(req_str)
 
-            # If there are no matching versions, either it's all-pre or honesty
-            # was over-caching.  I'm not sure why that happens yet.
+                pkg = parse_index(req.name, cache, use_json=True)
+                self.packages[req.name] = pkg
 
-            names = [req.name for req in self.reqs]
-            versions = [len(self.req_versions[name]) - 1 for name in names]
-            min_idx = [0] * len(names)
+                versions = list(req.specifier.filter(pkg.releases.keys()))
+                LOG.info(
+                    f"  [variable] fetched {req.name}: {len(versions)}/{len(pkg.releases)} allowed"
+                )
 
-            def tolines():
-                return [toline(i) for i in range(len(names))]
+                if len(versions) == 0:
+                    raise DepError("No versions match {req_str!r}; maybe pre-only?")
 
-            def toline(i):
-                name = names[i]
-                v = versions[i]
-                return name if v == -1 else f"{name}=={self.req_versions[name][v]}"
-
-            print("ok")
-
-            LOG.info("Check newest")
-            sys.stdout.write("check newest... ")
-            sys.stdout.flush()
-            result = self.scenario(d, tolines())
-            if not result:
-                LOG.error("Newest check failed, aborting")
-                return False
-            print("ok")
-
-            total = 1
-            for v in self.req_versions.values():
-                total += len(v) - 1
-
-            if not self.fast:
-                for i, name in enumerate(names):
-                    # try progressively older until we get a failure; skip this for
-                    # --fast mode and just try oldest
-                    remaining = 1  # "all min" verify
-                    for k in range(i, len(names)):
-                        remaining += len(self.req_versions[names[k]]) - 1
-
-                    for j in range(len(self.req_versions[name]) - 2, -1, -1):
-                        sys.stdout.write(
-                            f"check {total-remaining}/{total}...  {name}=={self.req_versions[name][j]} "
+                if req.name in versions:
+                    # Presumably this came from being in 'fixed' too; not being
+                    # in 'variable' twice.  If so it will only have one version.
+                    if self.versions[req.name][0] not in versions:
+                        LOG.warning(
+                            f"  [variable] fixed version {self.versions[req.name][0]!r} not in {versions!r} for {req_str!r}"
                         )
-                        sys.stdout.flush()
-                        remaining -= 1
 
-                        versions[i] = j
-                        LOG.info(f"Check {name}=={self.req_versions[name][j]}")
-                        try:
-                            result = self.scenario(d, [toline(i)])
-                        except CalledProcessError:
-                            # TODO some versions can't be installed because
-                            # they're wheel-only and don't have a version built
-                            # that we're testing on; this considers those to be
-                            # failures, but this might need to be
-                            # flag-controlled?
-                            result = False
-                        print("ok" if result else "fail")
+                    LOG.info(
+                        f"  [variable] widen due to variable: {req_str!r} -> {versions!r}"
+                    )
 
-                        if not result:
-                            if j == len(self.req_versions[name]) - 1:
-                                LOG.error("Newest version failed, shouldn't happen")
-                            min_idx[i] = j + 1
-                            break
-
-                    # Restore to newest, if we changed it...
-                    if len(self.req_versions[name]) > 1:
-                        versions[i] = len(self.req_versions[name]) - 1
-                        self.install(d, toline(i))
-                        print()
-
-            # TODO there might be cruft from other versions; how to verify,
-            # should we clean, and does that invalidate the more targeted
-            # version changes above?
-            LOG.info("Check all min")
-            versions = min_idx
-            result = self.scenario(d, tolines())
-            if not result:
-                LOG.error("Min check failed, aborting")
-                return False
-
-            print("Passing with min:")
-            print()
-            for i, name in enumerate(names):
-                old_req = str(self.reqs[i])
-                # TODO if we had a max version, keep that too
-                new_req = toline(i).replace("==", ">=")
-                if old_req != new_req and "==" not in old_req:
-                    print(f"{old_req} -> {new_req}")
+                if fast:
+                    if len(versions) == 1:
+                        self.versions[req.name] = [versions[0]]
+                    else:
+                        # zero-length already raised DepError
+                        self.versions[req.name] = [versions[0], versions[-1]]
                 else:
-                    print(f"{old_req}")
+                    self.versions[req.name] = versions
 
-            return True
-
-    def install(self, venv_dir, line):
-        LOG.debug("Install %s", line)
-        check_call([f"{venv_dir}/bin/pip", "install", line], stdout=PIPE, stderr=PIPE)
-
-    def scenario(self, venv_dir, lines):
-        for line in lines:
-            self.install(venv_dir, line)
-
-        env = os.environ.copy()
-        env["PATH"] = f"{venv_dir}/bin:{env['PATH']}"
-        sys.stdout.flush()
-
-        proc = run(
-            self.command,
-            shell=True,
-            env=env,
-            stdout=PIPE,
-            stderr=PIPE,
-            cwd=self.path,
-            encoding="utf-8",
+    def get_max_plan(self) -> Plan:
+        return Plan(
+            title="max",
+            versions={k: v[-1] for k, v in self.versions.items()},
+            fatal=True,
         )
-        # TODO: Verify that the versions are as expected; the command might do
-        # installs or otherwise change the environment...
 
-        # print(proc.stdout)
-        # print(proc.stderr)
-        LOG.debug("  Running test: %s", proc.returncode)
-        if proc.returncode != 0:
-            LOG.debug(proc.stdout)
-            LOG.debug(proc.stderr)
-        return proc.returncode == 0
+    def get_min_plan(self) -> Dict[str, str]:
+        return Plan(
+            title="min",
+            versions={k: v[0] for k, v in self.versions.items()},
+            fatal=True,
+        )
 
+    def get_intermediate_plans(self) -> List[Plan]:
+        # this might look like an unreasonable number, but note that we aren't
+        # using all combinations so this is only linear.
 
-if __name__ == "__main__":
-    main()
+        max_vers = self.get_max_plan().versions
+        ret: List[Plan] = []
+        for k, versions in self.versions.items():
+            for v in versions[:-1]:
+                vers = max_vers.copy()
+                vers[k] = v
+                ret.append(
+                    Plan(
+                        title=f"{k}:{v}", versions=vers, fatal=False, name=k, version=v,
+                    )
+                )
+        return ret
+
+    def solve(self, parallelism: int = 10) -> int:
+
+        queue: Queue[Optional[Plan]] = Queue()
+        results: Queue[Result] = Queue()
+        should_cancel: bool = False
+
+        def runner():
+            with tempfile.TemporaryDirectory() as d:
+                check_call([sys.executable, "-m", "venv", d])
+
+                env = os.environ.copy()
+                env["PATH"] = f"{d}/bin:{env['PATH']}"
+                env["COVERAGE_FILE"] = f"{d}/.coverage"
+
+                while True:
+                    item: Optional[Plan] = queue.get(block=True)
+                    if item is None:
+                        break
+
+                    if should_cancel:
+                        break
+
+                    # TODO keep track of what's installed, avoid issuing
+                    # duplicate install commands, and detect when an unexpected
+                    # version was installed (e.g. from a dep constraint).
+                    output: str = ""
+                    try:
+                        buf = ["python", "-m", "pip", "install"]
+                        for k, v in item.versions.items():
+                            buf.append(f"{k}=={v}")
+
+                        # TODO: escaping is wrong.
+                        output += f"$ {' '.join(buf)}"
+                        proc = run(
+                            buf,
+                            env=env,
+                            stdout=PIPE,
+                            stderr=STDOUT,
+                            cwd=self.path,
+                            encoding="utf-8",
+                        )
+                        output += proc.stdout
+
+                        if proc.returncode != 0:
+                            raise Exception("Install failed")
+
+                        output += f"$ {self.command}\n"
+                        proc = run(
+                            self.command,
+                            shell=True,
+                            env=env,
+                            stdout=PIPE,
+                            stderr=STDOUT,
+                            cwd=self.path,
+                            encoding="utf-8",
+                        )
+                        output += proc.stdout
+                        if proc.returncode != 0:
+                            raise Exception("Test failed")
+
+                    except Exception as e:
+                        results.put(Result(item, str(e), output))
+                    else:
+                        results.put(Result(item, None, output))
+                    queue.task_done()
+
+        threads = []
+        for i in range(parallelism):
+            t = threading.Thread(target=runner)
+            # t.setDaemon(True)
+            t.start()
+
+        # TODO consider these phases?
+        outstanding = 0
+
+        queue.put(self.get_max_plan())
+        outstanding += 1
+        if self.fast:
+            queue.put(self.get_min_plan())
+            outstanding += 1
+        else:
+            for plan in self.get_intermediate_plans():
+                queue.put(plan)
+                outstanding += 1
+
+        min_versions = {}
+        rv = 0
+
+        while outstanding and not should_cancel:
+            result = results.get(block=True)
+            outstanding -= 1
+            if result.exception:
+                print(f"FAIL {result.item.title}: {result.exception}")
+                # for line in result.output.splitlines():
+                #     print(f"  {line}")
+
+                if (
+                    result.item.name in min_versions
+                    and min_versions[result.item.name] < result.item.version
+                ):
+                    LOG.warning("  Inconsistent result")
+
+                if result.item.fatal:
+                    should_cancel = True
+                    rv = 1
+
+            else:
+                print(f"OK   {result.item.title}")
+                if result.item.name:
+                    assert result.item.version is not None
+                    if result.item.name in min_versions:
+                        min_versions[result.item.name] = min(
+                            min_versions[result.item.name], result.item.version
+                        )
+                    else:
+                        min_versions[result.item.name] = result.item.version
+
+        if not self.fast:
+            print("Final test")
+            print("==========")
+            print(min_versions)
+
+            queue.put(Plan(title="min", versions=min_versions, fatal=True))
+            result = results.get(block=True)
+            if result.exception:
+                print(f"FAIL {result.item.title}: {result.exception}")
+                rv = 2
+            else:
+                print(f"OK   {result.item.title}")
+                for k, v in min_versions.items():
+                    if self.versions[k][0] != v:
+                        print(f"Suggest narrowing: {k}>={v}")
+
+        for i in range(parallelism):
+            queue.put(None)
+
+        for t in threads:
+            t.join()
+
+        return rv
