@@ -10,6 +10,8 @@ class FunctionalTest(unittest.TestCase):
         # TODO unmingle stderr
         runner = CliRunner()
         result = runner.invoke(main, ["test_data/project1"],)
+        print(result.exit_code)
+        print(result.output)
         self.assertEqual(0, result.exit_code)
         self.assertIn("Variable ['volatile (<2)', 'attrs']", result.output)
         self.assertIn("Fixed ['attrs==20.1.0', 'moreorless']", result.output)
@@ -21,5 +23,7 @@ class FunctionalTest(unittest.TestCase):
     def test_project1_fast(self) -> None:
         runner = CliRunner()
         result = runner.invoke(main, ["--fast", "test_data/project1"],)
+        print(result.exit_code)
+        print(result.output)
         self.assertEqual(1, result.exit_code)
         self.assertIn("FAIL min", result.output)
