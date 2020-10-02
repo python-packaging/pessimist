@@ -34,3 +34,5 @@ jobs:
         run: make test
       - name: Lint
         run: make lint
+      - name: Pessimist
+        run: python -m pessimist -p 2 --fast .
