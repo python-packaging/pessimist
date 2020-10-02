@@ -2,22 +2,33 @@
 
 The name "optimist" was already taken?
 
-Given a `requirements.txt` and some basic information about how to run your
-tests, finds accurate minimum versions.
+Given your listed requirements, and how to run your tests, tries various
+versions to ensure the minimums are accurate.
 
 
 ## Usage
 
 ```
-python -m pessimist.manager [-c 'make test'] [--fast] [--extend] /path/to/repo
+python -m pessimist [-c 'make test'] [--fast] [--extend=name[,name...]] /path/to/repo
 ```
 
 * `-c` -- command to run.  If you're using a src/ layout you can use `cd src;
   python -m unittest` or so.
 * `--fast` -- only verify min and max versions
-* `--extend` -- ignore specifiers entirely; intended to let you go back past
-  `==` and may be improved to do something more like that in the future.
+* `--extend` -- ignore specifiers entirely for the listed canonical names;
+  intended to let you go back past `==` and may be improved to do something more
+  like that in the future.  Also allows `*` as a name to mean all names that are
+  "variable"
 * `--verbose` -- show logs as it's working
+
+
+## Fixed and variable
+
+* Fixed requirements are from `requirements*.txt`.  If these match more than one
+  version, only the newest is kept.
+* Variable requirements are from your setup.py/setup.cfg/etc that make it into
+  the metadata.  These are the ones we're interested in trying.
+* If a name is in both sets, the variable logic is followed.
 
 
 ## Strategy
