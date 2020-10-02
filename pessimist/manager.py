@@ -109,9 +109,12 @@ class Manager:
                 pkg = parse_index(name, cache, use_json=True)
                 self.packages[name] = pkg
 
-                versions = list(
-                    req.specifier.filter(pkg.releases.keys())  # type: ignore
-                )
+                if name in self.extend or "*" in self.extend:
+                    versions = list(pkg.releases.keys())  # type: ignore
+                else:
+                    versions = list(
+                        req.specifier.filter(pkg.releases.keys())  # type: ignore
+                    )
                 LOG.info(
                     f"  [variable] fetched {name}: {len(versions)}/{len(pkg.releases)} allowed"
                 )
