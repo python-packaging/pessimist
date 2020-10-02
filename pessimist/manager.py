@@ -185,11 +185,20 @@ class Manager:
                 check_call([sys.executable, "-m", "venv", d])
 
                 env = os.environ.copy()
+                cur_path = env["PATH"]
                 if os.sep != "/":
-                    env["PATH"] = f"{d}\\scripts;{env['PATH']}"
+                    if hasattr(sys, "base_prefix"):
+                        # Running in a venv; make SURE this venv is not
+                        # polluting the env
+                        cur_path = env["PATH"].split(";", 1)[1]
+                    env["PATH"] = f"{d}\\scripts;{cur_path}"
                     env["PYTHON"] = f"{d}\\scripts\\python.exe"
                 else:
-                    env["PATH"] = f"{d}/bin:{env['PATH']}"
+                    if hasattr(sys, "base_prefix"):
+                        # Running in a venv; make SURE this venv is not
+                        # polluting the env
+                        cur_path = env["PATH"].split(":", 1)[1]
+                    env["PATH"] = f"{d}/bin:{cur_path}"
                     env["PYTHON"] = f"{d}/bin/python"
                 env["COVERAGE_FILE"] = f"{d}/.coverage"
 
