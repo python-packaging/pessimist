@@ -64,11 +64,10 @@ def get_metadata(path: Path) -> Message:
 
 def get_requirements(path: Path) -> List[str]:
     req = []
-    for filename in path.glob("requirements*.txt"):
-        LOG.info("Reading reqs from %s", filename)
-        for line in filename.read_text().splitlines():
-            line = line.split("#", 1)[0].strip()
-            if not line:
-                continue
-            req.append(line)
+    LOG.info("Reading reqs from %s", path)
+    for line in path.read_text().splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        req.append(line)
     return req

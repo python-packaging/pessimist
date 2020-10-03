@@ -9,7 +9,7 @@ versions to ensure the minimums are accurate.
 ## Usage
 
 ```
-python -m pessimist [-c 'make test'] [--fast] [--extend=name[,name...]] /path/to/repo
+python -m pessimist [-c 'make test'] [--fast] [--extend=name[,name...]] [--requirements=requirements*.txt] /path/to/repo
 ```
 
 * `-c` -- command to run.  If you're using a src/ layout you can use `cd src;
@@ -19,6 +19,8 @@ python -m pessimist [-c 'make test'] [--fast] [--extend=name[,name...]] /path/to
   intended to let you go back past `==` and may be improved to do something more
   like that in the future.  Also allows `*` as a name to mean all names that are
   "variable"
+* `--requirements` -- comma-separated globs which represented "fixed"
+  requirements.
 * `--verbose` -- show logs as it's working
 
 
