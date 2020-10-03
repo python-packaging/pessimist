@@ -255,6 +255,8 @@ class Manager:
                     queue.task_done()
 
         threads: List[threading.Thread] = []
+        if self.fast:
+            parallelism = min(parallelism, 2)
         for i in range(parallelism):
             t = threading.Thread(target=runner)
             # t.setDaemon(True)
