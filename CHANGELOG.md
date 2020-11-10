@@ -1,3 +1,14 @@
+## v0.9.0
+
+* Handle some oddities that can exist in requirements.txt
+
+## v0.8.0
+
+* Limit `--fast` parallelism
+* Allow customizing requirements
+* Workflow to test itself
+* Try somewhat to isolate from current venv
+
 ## v0.7.0
 
 * Works on Windows
