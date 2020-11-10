@@ -1,9 +1,10 @@
 import unittest
+
 from pessimist.manager import Manager
 
 
 class ManagerTest(unittest.TestCase):
-    def test_is_pip_line(self):
+    def test_is_pip_line(self) -> None:
         self.assertTrue(Manager._is_pip_line("-e ../"))
         self.assertTrue(Manager._is_pip_line("-r r.txt"))
         self.assertTrue(Manager._is_pip_line("../"))

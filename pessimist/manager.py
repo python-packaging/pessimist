@@ -10,12 +10,11 @@ from subprocess import PIPE, STDOUT, check_call, run
 from typing import Dict, List, Optional, Set
 
 from highlighter import EnvironmentMarkers
-from packaging.requirements import Requirement
-from packaging.utils import canonicalize_name
-
 from honesty.cache import Cache
 from honesty.releases import Package, parse_index
 from honesty.version import Version
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
 
 LOG = logging.getLogger(__name__)
 
