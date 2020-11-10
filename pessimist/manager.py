@@ -62,6 +62,9 @@ class Manager:
             ".".join(map(str, sys.version_info[:3])), sys.platform
         )
 
+        self.pip_lines = [line for line in fixed if self._is_pip_line(line)]
+        fixed = [line for line in fixed if not self._is_pip_line(line)]
+
         for req_str in [*fixed, *variable]:
             req = Requirement(req_str)
             if req.marker and not env.match(req.marker):
@@ -216,23 +219,31 @@ class Manager:
                     output: str = ""
                     try:
                         buf = [env["PYTHON"], "-m", "pip", "install"]
+                        installed_something_flag = False
+                        for line in self.pip_lines:
+                            # TODO: It's probably not split, nor shlex.
+                            buf.extend(line.split())
+                            installed_something_flag = True
+
                         for k, v in item.versions.items():
                             buf.append(f"{k}=={v}")
+                            installed_something_flag = True
 
-                        # TODO: escaping is wrong.
-                        output += f"$ {' '.join(buf)}"
-                        proc = run(
-                            buf,
-                            env=env,
-                            stdout=PIPE,
-                            stderr=STDOUT,
-                            cwd=self.path,
-                            encoding="utf-8",
-                        )
-                        output += proc.stdout
+                        if installed_something_flag:
+                            # TODO: escaping is wrong.
+                            output += f"$ {' '.join(buf)}"
+                            proc = run(
+                                buf,
+                                env=env,
+                                stdout=PIPE,
+                                stderr=STDOUT,
+                                cwd=self.path,
+                                encoding="utf-8",
+                            )
+                            output += proc.stdout
 
-                        if proc.returncode != 0:
-                            raise Exception("Install failed")
+                            if proc.returncode != 0:
+                                raise Exception("Install failed")
 
                         output += f"$ {self.command}\n"
                         proc = run(
@@ -341,3 +352,20 @@ class Manager:
             t.join()
 
         return rv
+
+    @classmethod
+    def _is_pip_line(self, line: str) -> bool:
+        # This is a very incomplete support for stuff that pip supports that
+        # isn't considered a single Requirement.  We pass these through as a
+        # special kind of "fixed".
+        #
+        # ./
+        # -e ../foo
+        # -r requirements2.txt
+        # git+https://example.com/#egg=Foo
+        return (
+            line.startswith("-")
+            or "/" in line
+            or line.startswith("git+")
+            or line.startswith("hg+")
+        )
